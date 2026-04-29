@@ -268,9 +268,16 @@ def rag_chat(
                 "file_name": _basename(c.file_name),
                 "page_number": c.page_number,
                 "chunk_id": c.chunk_id,
+
                 "bm25_rank": c.bm25_rank,
                 "hnsw_rank": c.hnsw_rank,
+
+                "bm25_score": c.bm25_score,     # 🔥 ADD
+                "hnsw_score": c.hnsw_score,     # 🔥 ADD
+
                 "rrf_score": c.rrf_score,
+                "rerank_score": c.rerank_score, # 🔥 OPTIONAL (VERY USEFUL)
+
                 "content": c.content
             }
             for c in chunks
