@@ -113,7 +113,7 @@ export default function Documents() {
             style={{ padding: '0.75rem 1.5rem', boxShadow: 'var(--shadow-lg)', animation: 'pulse-ring 2s infinite' }}
             onClick={() => {
               const encodedDocs = Array.from(selectedDocs)
-                .map(d => encodeURIComponent(d.replace))
+                .map(d => encodeURIComponent(d))
                 .join(',');
               navigate(`/workspace?docs=${encodedDocs}`);
             }}
@@ -251,11 +251,12 @@ export default function Documents() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                       <input 
                         type="checkbox" 
-                        checked={selectedDocs.has(fileName)}
+                        checked={selectedDocs.has(blobPath)}
+
                         onChange={(e) => {
                           const newSet = new Set(selectedDocs);
-                          if (e.target.checked) newSet.add(fileName);
-                          else newSet.delete(fileName);
+                          if (e.target.checked) newSet.add(blobPath);   // ✅ FIX
+                          else newSet.delete(blobPath);
                           setSelectedDocs(newSet);
                         }}
                         style={{ width: '1.25rem', height: '1.25rem', cursor: 'pointer', accentColor: 'var(--primary)' }}

@@ -51,7 +51,7 @@ export default function Workspace() {
       // e.g. "pdfs/raw/report.pdf" → "report.pdf"
       // When docs is empty the backend will search across all PDFs (backward-compatible).
     let selectedFileNames = docs.map(d =>
-      d.split('/').pop().replace(/_/g, ' ')
+      d.split('/').pop()
     );
 
       const res = await fetch("/chat", {
@@ -297,6 +297,7 @@ function PdfViewer({ docParam, isExpanded }) {
   const [pageNumber, setPageNumber] = useState(1);
   const [pageBlobs, setPageBlobs] = useState([]);
   const fileName = docParam.split('/').pop(); // only for display
+  console.log("docParam:", docParam, typeof docParam);
   function onDocumentLoadSuccess({ numPages }) {
     setNumPages(numPages);
   }

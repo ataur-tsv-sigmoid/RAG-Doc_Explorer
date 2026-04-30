@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app.services.retrieval_service import hybrid_search, RetrievedChunk
-from app.services.llm_service import HuggingFaceRouterLLMClient, ChatMessage, ANSWER_GENERATION_PROMPT
+from app.services.llm_service import GroqLLMClient, ChatMessage, ANSWER_GENERATION_PROMPT
 from app.services.embedding_service import generate_embedding
 
 
@@ -178,7 +178,7 @@ def _format_history(history: List[ChatMessage]) -> str:
 
 # ── LLM CLIENT ─────────────────────────────────────────────
 
-_llm = HuggingFaceRouterLLMClient()
+_llm = GroqLLMClient()
 
 
 # ── MAIN RAG FUNCTION ──────────────────────────────────────
@@ -199,12 +199,22 @@ def rag_chat(
     else:
         standalone_query = user_message
 
-    # ── 3. Retrieve documents using the standalone query ─────
     chunks = hybrid_search(standalone_query, top_k=top_k)
 
     # ✅ FIX 3: fallback if retrieval fails (critical for first query)
     if not chunks:
         chunks = hybrid_search(user_message, top_k=top_k)
+
+    print("\n" + "="*70)
+    print("🔍 BEFORE FILTERING (RAW RETRIEVAL OUTPUT)")
+    print("="*70)
+
+    if not chunks:
+        print("❌ No chunks retrieved")
+    else:
+        for i, c in enumerate(chunks):
+            print(f"[{i}] file={c.file_name} | page={c.page_number} | rrf={c.rrf_score:.4f}")
+    # ── 3. Retrieve documents using the standalone query ─────
 
     # ── 4. Filter chunks to selected documents (post-retrieval, pre-context) ──
     # If the user selected specific PDFs, discard chunks from other documents
@@ -213,6 +223,38 @@ def rag_chat(
     if selected_pdf_ids:
         selected_basenames = {os.path.basename(f) for f in selected_pdf_ids}
         chunks = [c for c in chunks if _basename(c.file_name) in selected_basenames]
+
+
+    if selected_pdf_ids:
+        print("\n" + "="*70)
+        print("🧹 APPLYING FILTER")
+        print("="*70)
+
+        selected_basenames = {os.path.basename(f) for f in selected_pdf_ids}
+
+        print("Selected basenames:", selected_basenames)
+
+        filtered_chunks = []
+        for c in chunks:
+            chunk_name = os.path.basename(c.file_name)
+            match = chunk_name in selected_basenames
+
+            print(f"Checking: {chunk_name} → {'✅ MATCH' if match else '❌ NO MATCH'}")
+
+            if match:
+                filtered_chunks.append(c)
+
+        print("\n" + "="*70)
+        print("📊 AFTER FILTERING")
+        print("="*70)
+
+        if not filtered_chunks:
+            print("❌ All chunks removed after filtering")
+        else:
+            for i, c in enumerate(filtered_chunks):
+                print(f"[{i}] file={c.file_name} | page={c.page_number}")
+
+    chunks = filtered_chunks
     # ── 5. Context ────────────────────
     context = ContextBuilder.build(chunks)
 

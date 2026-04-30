@@ -8,9 +8,23 @@ from openai import OpenAI
 
 
 # ── ENV CONFIG ─────────────────────────────────────────────
-HF_TOKEN = os.getenv("HF_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-MODEL = "meta-llama/Llama-4-Scout-17B-16E-Instruct:groq"
+MODEL = "qwen/qwen3-32b"
+# "llama-3.1-8b-instant"
+
+# # Balanced
+# "llama-4-scout-17b-16e-instruct"
+
+# # Best quality
+# "llama-3.3-70b-versatile"
+
+# # Alternative reasoning
+# "qwen/qwen3-32b"
+
+# # Experimental
+# "openai/gpt-oss-20b"
+# "openai/gpt-oss-120b"
 
 
 # ── DTO ────────────────────────────────────────────────────
@@ -65,6 +79,34 @@ STEP 2 — SYNTHESIS
 IMPORTANT:
 - Do NOT output these steps.
 - Only output the final answer.
+                                           
+====================
+DOCUMENT STRUCTURE UNDERSTANDING (CRITICAL)
+====================
+The provided context consists of chunks extracted from documents. These chunks may represent different structural parts of a document.
+
+You MUST analyze and infer the structure of the content before answering.
+
+Possible structures include (but are not limited to):
+- Title page / front page (document title, authors, abstract-like text)
+- Section headings and paragraphs
+- Tables (structured rows and columns)
+- Lists or enumerations
+- Headers / footers / repeated metadata
+- Captions or labels
+
+You MUST:
+1. Identify the role of each chunk (e.g., title, table, section content, metadata).
+2. Use this structural understanding to interpret the content correctly.
+3. Treat front-page or title content as contextual, not as the main answer unless relevant.
+4. When encountering tabular or structured data:
+   - Understand relationships within rows.
+   - Extract logically grouped information correctly.
+5. Ignore irrelevant structural noise (headers, footers, repeated labels) unless useful.
+
+IMPORTANT:
+- Do NOT treat all chunks equally — their structural role matters.
+- Misinterpreting structure will lead to incorrect answers.
 
 ====================
 RELEVANCE & COMPLETENESS
@@ -73,6 +115,18 @@ RELEVANCE & COMPLETENESS
 5. Prefer completeness WITH relevance — include all necessary details, but avoid anything unrelated.
 6. Do NOT omit important details if they are present in the context.
 
+                                           ====================
+STRICT LENGTH CONTROL (CRITICAL)
+====================
+Your answer MUST be complete within 150 tokens.
+
+- Do NOT exceed 250 tokens
+- Do NOT produce partial or cut-off sentences
+- Prioritize the most important information only
+- If needed, summarize aggressively while preserving meaning
+
+A short, complete answer is ALWAYS better than a long incomplete one.
+                                           
 ====================
 GAP HANDLING (CRITICAL)
 ====================
@@ -96,14 +150,32 @@ CITATIONS
 14. When combining multiple facts, cite all relevant sources.
 
 ====================
-OUTPUT FORMAT
+STRICT OUTPUT CONTROL (CRITICAL)
 ====================
-15. Start directly with the answer — no introductions.
-16. Write in clear, natural, flowing prose.
-17. Do NOT use bullet points or numbered lists.
-18. Do NOT include newline escape sequences (\\n).
-19. Do NOT include meta commentary.
+You MUST NOT output any internal reasoning, thoughts, or hidden analysis.
 
+Specifically:
+- Do NOT include anything inside <think>...</think>
+- Do NOT explain your reasoning process
+- Do NOT show step-by-step thinking
+- Do NOT include analysis before the answer
+
+Only output the FINAL ANSWER.
+
+If you include any reasoning, your response is incorrect.
+
+                                           ====================
+CONCISENESS REQUIREMENT
+====================
+Your answer MUST be concise and to the point.
+
+- Avoid unnecessary elaboration
+- Avoid repeating the same idea
+- Prefer compact explanations over long paragraphs
+- Include only information relevant to the question
+
+Long, verbose answers are incorrect.
+                                           
 ====================
 STRUCTURE AWARENESS
 ====================
@@ -136,15 +208,15 @@ DOCUMENT CONTEXT
 
 # ── CLIENT ─────────────────────────────────────────────────
 
-class HuggingFaceRouterLLMClient:
+class GroqLLMClient:
 
     def __init__(self):
-        if not HF_TOKEN:
-            raise ValueError("HF_TOKEN is not set")
+        if not GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY is not set")
 
         self.client = OpenAI(
-            base_url="https://router.huggingface.co/v1",
-            api_key=HF_TOKEN,
+            base_url="https://api.groq.com/openai/v1",
+            api_key=GROQ_API_KEY,
         )
 
     def _call(self, messages: list, temperature: float = 0.0) -> str:
@@ -166,16 +238,7 @@ class HuggingFaceRouterLLMClient:
     ) -> str:
         """
         Step 1 — Query Rewriting.
-
-        Converts a follow-up question into a standalone question using the
-        conversation history, so retrieval is context-independent.
-
-        Returns the rewritten (standalone) question string.
         """
-        # if not history:
-        #     # No history → question is already standalone
-        #     return follow_up
-
         history_text = "\n".join(
             f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}"
             for m in history
@@ -193,7 +256,7 @@ class HuggingFaceRouterLLMClient:
             },
         ]
 
-        return self._call(messages, temperature=0.0)
+        return self._call(messages)
 
     def generate(
         self,
@@ -203,9 +266,6 @@ class HuggingFaceRouterLLMClient:
     ) -> str:
         """
         Step 2 — Answer Generation.
-
-        Sends system prompt (containing doc context) + trimmed history +
-        user message to the LLM and returns the raw answer.
         """
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -214,4 +274,4 @@ class HuggingFaceRouterLLMClient:
 
         messages.append({"role": "user", "content": user_message})
 
-        return self._call(messages, temperature=0.0)
+        return self._call(messages)
