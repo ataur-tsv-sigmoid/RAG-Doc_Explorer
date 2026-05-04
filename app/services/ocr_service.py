@@ -205,9 +205,6 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
             result = poller.result()
             logger.info(f"OCR completed for page {page_num}")
 
-            # -----------------------------
-            # DB: store page metadata
-            # -----------------------------
             insert_page(
                 document_id=doc_id,
                 page_number=page_num,
@@ -215,103 +212,60 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
                 local_path=pdf_path
             )
 
-
-            # items = []
-
-            # # -----------------------------
-            # # PARAGRAPHS
-            # # -----------------------------
-            # if result.paragraphs:
-            #     for para in result.paragraphs:
-            #         if para.content:
-            #             items.append({
-            #                 "type": "PARAGRAPH",
-            #                 "text": para.content.strip()
-            #             })
-
-            # # -----------------------------
-            # # TABLE CELLS
-            # # -----------------------------
-            # if result.tables:
-            #     for t_idx, table in enumerate(result.tables):
-            #         for cell in table.cells:
-            #             if cell.content:
-            #                 items.append({
-            #                     "type": f"TABLE_CELL (r{cell.row_index}, c{cell.column_index})",
-            #                     "text": cell.content.strip()
-            #                 })
-
-            # # -----------------------------
-            # # LINES (raw fallback)
-            # # -----------------------------
-            # if result.pages:
-            #     for page in result.pages:
-            #         for line in page.lines or []:
-            #             if line.content:
-            #                 items.append({
-            #                     "type": "LINE",
-            #                     "text": line.content.strip()
-            #                 })
-
-            # # -----------------------------
-            # # SINGLE LOOP OUTPUT
-            # # -----------------------------
-            # logger.info("------ UNIFIED CONTENT ------")
-
-            # for item in items:
-            #     logger.info(f"[{item['type']}] -> {item['text']}")
-
             extracted_parts = []
-
-            # -----------------------------
-            # ✅ CASE 1: TABLE EXISTS
-            # -----------------------------
+            # logger.info(f"{page_num} RESULT IS {result}")
             if result.tables:
-
-                # 1. Extract heading (first paragraph only)
                 if result.paragraphs:
                     first_para = result.paragraphs[0].content.strip()
                     if first_para:
                         extracted_parts.append(f"[HEADING] {first_para}")
 
-                # 2. Extract tables (main structured content)
                 for table in result.tables:
                     extracted_parts.extend(table_to_structured_text(table))
 
-
-            # -----------------------------
-            # ✅ CASE 2: NO TABLE → USE PARAGRAPHS
-            # -----------------------------
-            elif result.paragraphs:
+            if result.paragraphs:
                 for para in result.paragraphs:
                     if para.content:
                         extracted_parts.append(para.content.strip())
 
-
-            # -----------------------------
-            # ✅ CASE 3: FALLBACK → LINES
-            # -----------------------------
-            elif result.pages:
+            if result.pages:
+                for page in result.pages:
+                    for line in page.lines or []:
+                        if line.content:
+                            extracted_parts.append(line.content.strip())
+            
+            if not extracted_parts and result.pages:
                 for page in result.pages:
                     for line in page.lines or []:
                         if line.content:
                             extracted_parts.append(line.content.strip())
 
             full_text = " ".join(extracted_parts)
-
-            # Optional: keep your cleaning (light)
+            # logger.info(f"{page_num} CONTENT IS {full_text}")
             text = clean_text(full_text) if full_text else ""
 
             if not text:
                 logger.warning(f"Empty OCR text for page {page_num}")
 
-            tags = ["general"]
+            # 🔥 chunk_type logic
+            chunk_type = "body"
 
+            if result.tables:
+                chunk_type = "table"
+            elif result.paragraphs:
+                first_para = result.paragraphs[0].content.strip() if result.paragraphs else ""
+                if first_para and len(first_para.split()) <= 6:
+                    chunk_type = "title"
+
+            tags = [chunk_type]
+
+            # 🔥 STORE WITH chunk_type
             insert_ocr(
                 document_id=doc_id,
                 page_number=page_num,
                 content=text,
-                tags=tags
+                tags=tags,
+                chunk_type=chunk_type
             )
 
             docs = [
@@ -321,7 +275,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
                         "document_id": document_id,
                         "source": document_id,
                         "page": page_num,
-                        "tags": tags
+                        "chunk_type": chunk_type
                     }
                 )
             ]
@@ -331,7 +285,6 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
         finally:
             if pdf_path and os.path.exists(pdf_path):
                 os.remove(pdf_path)
-
     # -----------------------------
     # ✅ Parallel processing
     # -----------------------------
@@ -357,7 +310,7 @@ def process_batch(chunks, meta, doc_id, document_id, file_type):
     try:
         embeddings = generate_embedding(chunks, is_query=False)  # ⚠️ must support list input
 
-        for emb, (page_num, chunk_id), chunk in zip(embeddings, meta, chunks):
+        for emb, (page_num, chunk_id, chunk_type), chunk in zip(embeddings, meta, chunks):
             insert_embedding(
                 id=f"{doc_id}_p{page_num}_c{chunk_id}",
                 document_id=doc_id,
@@ -366,7 +319,8 @@ def process_batch(chunks, meta, doc_id, document_id, file_type):
                 page_number=page_num,
                 chunk_id=chunk_id,
                 content=chunk,
-                embedding=emb
+                embedding=emb,
+                chunk_type=chunk_type
             )
 
     except Exception as e:
@@ -392,13 +346,17 @@ def run_embeddings(doc_id: int, document_id: str, file_type: str):
             continue
 
         chunks = _chunk_text(text)
+        if not chunks:
+            logger.warning(f"No chunks for page {page_num}, using full text")
+            chunks = [text]
 
         for i, chunk in enumerate(chunks):
             if not chunk.strip():
                 continue
 
             batch_chunks.append(chunk)
-            batch_meta.append((page_num, i))
+            chunk_type = "body"   # 🔥 simple for now
+            batch_meta.append((page_num, i, chunk_type))
 
             # 🚀 When batch is full → process
             if len(batch_chunks) == BATCH_SIZE:

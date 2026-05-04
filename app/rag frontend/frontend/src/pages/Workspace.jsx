@@ -39,50 +39,67 @@ export default function Workspace() {
   }, [messages, loading]);
 
   const handleAsk = async () => {
-    if (!query.trim()) return;
+  if (!query.trim()) return;
 
-    const userMsg = { role: "user", text: query };
-    setMessages((prev) => [...prev, userMsg]);
-    setLoading(true);
-    setQuery("");
+  const userMsg = { role: "user", text: query };
+  setMessages((prev) => [...prev, userMsg]);
+  setLoading(true);
+  setQuery("");
 
-    try {
-      // Extract file basenames from blob paths to match what the DB stores in file_name.
-      // e.g. "pdfs/raw/report.pdf" → "report.pdf"
-      // When docs is empty the backend will search across all PDFs (backward-compatible).
-    let selectedFileNames = docs.map(d =>
-      d.split('/').pop()
-    );
+  let selectedFileNames = docs.map(d => d.split('/').pop());
 
-      const res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMsg.text,
-          conversation_id: "default_session",
-          selected_pdf_ids: selectedFileNames,   // NEW: drives retrieval-level filtering
-        }),
-      });
+  const res = await fetch("/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: userMsg.text,
+      conversation_id: "default_session",
+      selected_pdf_ids: selectedFileNames,
+    }),
+  });
 
-      if (res.ok) {
-        const data = await res.json();
-        // console.log("SOURCES"*70,data)
-        // NEW: attach source_references to bot message for display
-        setMessages((prev) => [...prev, {
-          role: "bot",
-          text: data.answer || "No response received.",
-          sources: data.source_references || [],
-        }]);
-      } else {
-        setMessages((prev) => [...prev, { role: "bot", text: "Error: Could not retrieve response from the server." }]);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+
+  let botMessage = "";
+
+  // create empty bot message
+  setMessages(prev => [...prev, { role: "bot", text: "" }]);
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split("\n\n");
+
+    for (let line of lines) {
+      if (!line.startsWith("data:")) continue;
+
+      const data = JSON.parse(line.replace("data: ", ""));
+
+      if (data.type === "token") {
+        botMessage += data.content;
+
+        setMessages(prev => {
+          const updated = [...prev];
+          updated[updated.length - 1].text = botMessage;
+          return updated;
+        });
       }
-    } catch (e) {
-      console.error("Chat API failed", e);
-      setMessages((prev) => [...prev, { role: "bot", text: "Error: Connection to the server failed." }]);
-    }
 
-    setLoading(false);
-  };
+      if (data.type === "done") {
+        setMessages(prev => {
+          const updated = [...prev];
+          updated[updated.length - 1].sources = data.sources;
+          return updated;
+        });
+      }
+    }
+  }
+
+  setLoading(false);
+};
 
   const onKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {

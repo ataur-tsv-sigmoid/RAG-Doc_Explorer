@@ -275,3 +275,38 @@ class GroqLLMClient:
         messages.append({"role": "user", "content": user_message})
 
         return self._call(messages)
+    
+    def generate_stream(
+        self,
+        system_prompt: str,
+        history: List[ChatMessage],
+        user_message: str,
+    ):
+        messages = [{"role": "system", "content": system_prompt}]
+
+        for msg in history:
+            messages.append({"role": msg.role, "content": msg.content})
+
+        messages.append({"role": "user", "content": user_message})
+
+        try:
+            stream = self.client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                temperature=0.0,
+                stream=True,
+            )
+
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+
+                if not delta:
+                    continue
+
+                content = getattr(delta, "content", None)
+
+                if content:
+                    yield content
+
+        except Exception as e:
+            raise e

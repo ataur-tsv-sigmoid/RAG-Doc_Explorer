@@ -221,17 +221,11 @@ def rag_chat(
     # before building the LLM context. Filtering here (rather than in SQL) keeps
     # the retrieval layer clean and lets ranking/reranking see the full corpus.
     if selected_pdf_ids:
-        selected_basenames = {os.path.basename(f) for f in selected_pdf_ids}
-        chunks = [c for c in chunks if _basename(c.file_name) in selected_basenames]
-
-
-    if selected_pdf_ids:
         print("\n" + "="*70)
         print("🧹 APPLYING FILTER")
         print("="*70)
 
         selected_basenames = {os.path.basename(f) for f in selected_pdf_ids}
-
         print("Selected basenames:", selected_basenames)
 
         filtered_chunks = []
@@ -254,7 +248,8 @@ def rag_chat(
             for i, c in enumerate(filtered_chunks):
                 print(f"[{i}] file={c.file_name} | page={c.page_number}")
 
-    chunks = filtered_chunks
+        # ✅ Only overwrite when filter is applied
+        chunks = filtered_chunks
     # ── 5. Context ────────────────────
     context = ContextBuilder.build(chunks)
 
@@ -332,6 +327,114 @@ def rag_chat(
         metadata=metadata,
         conversation_id=conversation_id,
     )
+
+def rag_prepare(
+    user_message: str,
+    conversation_id: str,
+    selected_pdf_ids: List[str],
+):
+    recent_history = _history.get_recent(conversation_id)
+
+    # ── 2. Query rewriting ────────────
+    if recent_history:
+        standalone_query = _llm.rewrite_query(recent_history, user_message)
+    else:
+        standalone_query = user_message
+
+    chunks = hybrid_search(standalone_query, top_k=5)
+
+    # ✅ FIX 3: fallback if retrieval fails (critical for first query)
+    if not chunks:
+        chunks = hybrid_search(user_message, top_k=5)
+
+    print("\n" + "="*70)
+    print("🔍 BEFORE FILTERING (RAW RETRIEVAL OUTPUT)")
+    print("="*70)
+
+    if not chunks:
+        print("❌ No chunks retrieved")
+    else:
+        for i, c in enumerate(chunks):
+            print(f"[{i}] file={c.file_name} | page={c.page_number} | rrf={c.rrf_score:.4f}")
+    # ── 3. Retrieve documents using the standalone query ─────
+
+    # ── 4. Filter chunks to selected documents (post-retrieval, pre-context) ──
+    # If the user selected specific PDFs, discard chunks from other documents
+    # before building the LLM context. Filtering here (rather than in SQL) keeps
+    # the retrieval layer clean and lets ranking/reranking see the full corpus.
+    if selected_pdf_ids:
+        print("\n" + "="*70)
+        print("🧹 APPLYING FILTER")
+        print("="*70)
+
+        selected_basenames = {os.path.basename(f) for f in selected_pdf_ids}
+        print("Selected basenames:", selected_basenames)
+
+        filtered_chunks = []
+        for c in chunks:
+            chunk_name = os.path.basename(c.file_name)
+            match = chunk_name in selected_basenames
+
+            print(f"Checking: {chunk_name} → {'✅ MATCH' if match else '❌ NO MATCH'}")
+
+            if match:
+                filtered_chunks.append(c)
+
+        print("\n" + "="*70)
+        print("📊 AFTER FILTERING")
+        print("="*70)
+
+        if not filtered_chunks:
+            print("❌ All chunks removed after filtering")
+        else:
+            for i, c in enumerate(filtered_chunks):
+                print(f"[{i}] file={c.file_name} | page={c.page_number}")
+
+        # ✅ Only overwrite when filter is applied
+        chunks = filtered_chunks
+    # ── 5. Context ────────────────────
+    context = ContextBuilder.build(chunks)
+
+    # ── 6. Semantic history ───────────
+    semantic_history = _history.semantic_search(
+        conversation_id,
+        standalone_query,
+        top_k=SEMANTIC_TOP_K,
+    )
+
+    history_text = _format_history(semantic_history)
+
+    # ── 7. Prompt ─────────────────────
+    system_prompt = (
+        ANSWER_GENERATION_PROMPT
+        + f"\n\nCONVERSATION HISTORY:\n{history_text}"
+        + f"\n\nDOCUMENT CONTEXT:\n{context}"
+    )
+    print("\n" + "="*80)
+    print("🧠 FINAL SYSTEM PROMPT SENT TO LLM")
+    print("="*80)
+    print(system_prompt)
+
+    print("\n" + "="*80)
+    print("💬 SEMANTIC HISTORY PASSED TO LLM")
+    print("="*80)
+    for msg in semantic_history:
+        print(f"{msg.role.upper()}: {msg.content}")
+
+    print("\n" + "="*80)
+    print("❓ USER MESSAGE")
+    print("="*80)
+    print(user_message)
+    print("="*80 + "\n")
+
+
+    # DO NOT call _llm.generate()
+
+    return {
+        "system_prompt": system_prompt,
+        "history": semantic_history,
+        "chunks": chunks,
+    }
 
 
 def clear_history(conversation_id: str):
