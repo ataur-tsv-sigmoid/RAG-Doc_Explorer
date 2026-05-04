@@ -4,7 +4,7 @@ import { UploadCloud, FileText, CheckCircle, Play, Download, Loader2, MessageSqu
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function Documents() {
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [documents, setDocuments] = useState([]);
   const [loadingDocs, setLoadingDocs] = useState(true);
@@ -53,37 +53,41 @@ export default function Documents() {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setFiles(Array.from(e.dataTransfer.files));
     }
   };
 
   const handleUpload = async () => {
-    if (!file) return;
-    setUploading(true);
+  if (files.length === 0) return;
 
-    const formData = new FormData();
-    formData.append("file", file);
+  setUploading(true);
 
-    try {
-      const res = await fetch("/upload", {
-        method: "POST",
-        body: formData,
-      });
-      
-      if (!res.ok) {
-        const errorText = await res.text();
-        alert(`Upload failed: ${res.status} - ${errorText}`);
-      } else {
-        fetchDocuments(); // Refresh list after upload
-      }
-    } catch (e) {
-      console.error("Upload failed", e);
+  const formData = new FormData();
+
+  files.forEach(file => {
+    formData.append("files", file);
+  });
+
+  try {
+    const res = await fetch("/upload-multiple", {
+      method: "POST",
+      body: formData,
+    });
+    console.log(data.results);
+    if (!res.ok) {
+      const errorText = await res.text();
+      alert(`Upload failed: ${res.status} - ${errorText}`);
+    } else {
+      fetchDocuments();
     }
+  } catch (e) {
+    console.error("Upload failed", e);
+  }
 
-    setUploading(false);
-    setFile(null);
-  };
+  setUploading(false);
+  setFiles([]);   // ✅ important
+};
 
   /*const handleProcess = async (fileName) => {
     try {
@@ -146,51 +150,59 @@ export default function Documents() {
               transition: 'all 0.2s ease',
               cursor: 'pointer'
             }}
-            onClick={() => inputRef.current?.click()}
+            onClick={() => !uploading && inputRef.current?.click()}
           >
             <input 
               ref={inputRef}
               type="file" 
               accept=".pdf" 
+              multiple
+              onChange={(e) => setFiles(Array.from(e.target.files))}
               style={{ display: 'none' }} 
-              onChange={(e) => setFile(e.target.files[0])}
             />
             
-            <>
-              {file ? (
-                <div 
-                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}
-                >
-                  <div style={{ background: 'var(--muted)', padding: '1rem', borderRadius: '50%' }}>
-                    <FileText size={32} color="var(--primary)" />
-                  </div>
-                  <div>
-                    <p style={{ fontWeight: 600, color: 'var(--foreground)' }}>{file.name}</p>
-                    <p style={{ fontSize: '0.875rem', color: 'var(--muted-foreground)' }}>
-                      {(file.size / 1024 / 1024).toFixed(2)} MB
-                    </p>
-                  </div>
-                  <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-                    <button 
-                      className="btn btn-secondary" 
-                      onClick={(e) => { e.stopPropagation(); setFile(null); }}
-                      disabled={uploading}
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      className="btn btn-primary" 
-                      onClick={(e) => { e.stopPropagation(); handleUpload(); }}
-                      disabled={uploading}
-                    >
-                      {uploading ? (
-                        <><Loader2 size={16} className="animate-spin" /> Uploading...</>
-                      ) : (
-                        <><UploadCloud size={16} /> Upload to Library</>
-                      )}
-                    </button>
-                  </div>
-                </div>
+<>
+  {files.length > 0 ? (
+    <div 
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}
+    >
+      <div style={{ background: 'var(--muted)', padding: '1rem', borderRadius: '50%' }}>
+        <FileText size={32} color="var(--primary)" />
+      </div>
+
+      <div style={{ textAlign: 'center' }}>
+        {files.map((f, i) => (
+          <p key={i} style={{ fontWeight: 600 }}>
+            {f.name}
+          </p>
+        ))}
+        <p style={{ fontSize: '0.875rem', color: 'var(--muted-foreground)' }}>
+          {files.length} file{files.length > 1 ? "s" : ""} selected
+        </p>
+      </div>
+
+      <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+        <button 
+          className="btn btn-secondary" 
+          onClick={(e) => { e.stopPropagation(); setFiles([]); }}
+          disabled={uploading}
+        >
+          Cancel
+        </button>
+
+        <button 
+          className="btn btn-primary" 
+          onClick={(e) => { e.stopPropagation(); handleUpload(); }}
+          disabled={uploading}
+        >
+          {uploading ? (
+            <><Loader2 size={16} className="animate-spin" /> Uploading...</>
+          ) : (
+            <><UploadCloud size={16} /> Upload {files.length} File{files.length > 1 ? "s" : ""}</>
+          )}
+        </button>
+      </div>
+    </div>
               ) : (
                 <div
                   style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}
@@ -203,7 +215,7 @@ export default function Documents() {
                       Click or drag a file to this area to upload
                     </p>
                     <p style={{ color: 'var(--muted-foreground)', fontSize: '0.875rem' }}>
-                      Supports single PDF upload
+                      Supports multiple PDF upload
                     </p>
                   </div>
                 </div>

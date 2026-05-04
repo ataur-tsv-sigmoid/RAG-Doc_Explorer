@@ -1,13 +1,19 @@
 import os
 import logging
 
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from pypdf import PdfReader
 from app.db.init_db import run_db_init
+from app.services.llm_service import GroqLLMClient
+_llm = GroqLLMClient()
+from app.services.rag_service import rag_prepare
+from app.services.rag_service import _history
+from app.services.llm_service import ChatMessage
 
 from app.db.db import Database
 from app.core.config import settings
@@ -65,6 +71,160 @@ def health():
     storage = AzureStorageService()
     return {"status": "ok"}
 
+import json
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+
+    def event_generator():
+        full_answer = ""
+
+        try:
+            # ─────────────────────────────
+            # 1. PREPARE RAG (NO LLM CALL)
+            # ─────────────────────────────
+            rag_data = rag_prepare(
+                user_message=request.message,
+                conversation_id=request.conversation_id,
+                selected_pdf_ids=request.selected_pdf_ids,
+            )
+
+            system_prompt = rag_data["system_prompt"]
+            history = rag_data["history"]
+            chunks = rag_data["chunks"]
+
+            # ─────────────────────────────
+            # 2. STREAM TOKENS FROM LLM
+            # ─────────────────────────────
+            buffer = ""   # helps avoid flickering UI
+
+            for token in _llm.generate_stream(
+                system_prompt,
+                history,
+                request.message,
+            ):
+                full_answer += token
+                buffer += token
+
+                # flush every few chars (smooth streaming)
+                if len(buffer) > 20:
+                    yield f"data: {json.dumps({'type': 'token', 'content': buffer})}\n\n"
+                    buffer = ""
+
+            # flush remaining buffer
+            if buffer:
+                yield f"data: {json.dumps({'type': 'token', 'content': buffer})}\n\n"
+
+            # ─────────────────────────────
+            # 3. STORE CONVERSATION MEMORY
+            # ─────────────────────────────
+            _history.append(
+                request.conversation_id,
+                ChatMessage("user", request.message)
+            )
+
+            _history.append(
+                request.conversation_id,
+                ChatMessage("assistant", full_answer)
+            )
+
+            # ─────────────────────────────
+            # 4. FINAL EVENT (SOURCES)
+            payload = {
+                "type": "done",
+                "sources": [
+                    {
+                        "file_name": c.file_name,
+                        "page_number": c.page_number,
+                    }
+                    for c in chunks
+                ],
+            }
+
+            yield f"data: {json.dumps(payload)}\n\n"
+
+        except Exception as e:
+            # ─────────────────────────────
+            # ERROR HANDLING
+            # ─────────────────────────────
+            error_payload = {
+            "type": "error",
+            "content": str(e),
+            }
+
+            yield f"data: {json.dumps(error_payload)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+def process_file(file, storage):
+    temp_path = f"/tmp/{file.filename}"
+    doc_id = None
+
+    try:
+        # Save file
+        with open(temp_path, "wb") as f:
+            f.write(file.file.read())
+
+        # Upload
+        blob_name = storage.upload_file(temp_path, file_type="pdf")
+
+        # DB
+        doc_id, already_exists = create_document(
+            file_name=file.filename,
+            blob_path=blob_name,
+            container=settings.AZURE_STORAGE_CONTAINER,
+            file_type="pdf",
+        )
+
+        if already_exists:
+            return {"file": file.filename, "status": "already_processed"}
+
+        update_status(doc_id, "processing")
+
+        # 🔥 Full pipeline
+        docs = process_single_pdf(temp_path, file.filename, doc_id, "pdf")
+
+        page_count = len(PdfReader(temp_path).pages)
+
+        update_page_count(doc_id, page_count)
+        update_status(doc_id, "completed")
+
+        return {
+            "file": file.filename,
+            "status": "completed",
+            "pages": page_count,
+            "chunks": len(docs),
+        }
+
+    except Exception as e:
+        if doc_id:
+            update_status(doc_id, "failed")
+
+        return {
+            "file": file.filename,
+            "status": "failed",
+            "error": str(e),
+        }
+
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@app.post("/upload-multiple")
+async def upload_multiple(files: List[UploadFile] = File(...)):
+    storage = AzureStorageService()
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results = list(executor.map(lambda f: process_file(f, storage), files))
+
+    return {"results": results}
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
@@ -326,7 +486,7 @@ async def search_documents(request: SearchRequest):
         # =========================
         # ✅ CONTENT SEARCH (UNCHANGED)
         # =========================
-        results = hybrid_search(query=request.query, top_k=request.top_k)
+        results = hybrid_search(query=request.query, top_k=5)
         # ✅ Apply HNSW score threshold filtering
         filtered_results = [
             r for r in results

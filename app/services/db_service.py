@@ -145,7 +145,7 @@ def insert_page(document_id, page_number, page_blob_path, local_path):
         Database.return_connection(conn)
 
 
-def insert_ocr(document_id, page_number, content, tags):
+def insert_ocr(document_id, page_number, content, tags, chunk_type):
     conn = Database.get_connection()
     try:
         with conn:
@@ -156,12 +156,13 @@ def insert_ocr(document_id, page_number, content, tags):
                         document_id,
                         page_number,
                         content,
-                        tags
+                        tags,
+                        chunk_type
                     )
-                    VALUES (%s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (document_id, page_number) DO NOTHING
                     """,
-                    (document_id, page_number, content, tags)
+                    (document_id, page_number, content, tags, chunk_type)
                 )
     finally:
         Database.return_connection(conn)
@@ -188,7 +189,8 @@ def insert_embedding(
     page_number,
     chunk_id,
     content,
-    embedding
+    embedding,
+    chunk_type
 ):
     conn = Database.get_connection()
     try:
@@ -198,9 +200,9 @@ def insert_embedding(
                     """
                     INSERT INTO embeddings (
                         id, document_id, file_name, file_type,
-                        page_number, chunk_id, content, embedding
+                        page_number, chunk_id, content, embedding, chunk_type
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (document_id, page_number, chunk_id) DO NOTHING
                     """,
                     (
@@ -211,7 +213,8 @@ def insert_embedding(
                         page_number,
                         chunk_id,
                         content,
-                        embedding
+                        embedding,
+                        chunk_type
                     )
                 )
     finally:
