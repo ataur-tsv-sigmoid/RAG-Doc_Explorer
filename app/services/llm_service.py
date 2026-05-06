@@ -146,8 +146,24 @@ PRECISION RULES
 ====================
 CITATIONS
 ====================
-13. ALWAYS cite sources using ([Source N]) immediately after each factual statement.
-14. When combining multiple facts, cite all relevant sources.
+
+13. ALWAYS cite sources using page references in this exact format:
+   (Page X)
+
+Examples:
+- (Page 2)
+- (Page 5, Page 7)
+
+14. NEVER use citations like:
+- [Source 1]
+- [Source 2]
+- Source N
+
+15. If multiple pages support a statement, include all relevant page numbers.
+
+16. Use ONLY page numbers from the provided document context headers.
+
+17. Citation format must remain concise and human readable.
 
 ====================
 STRICT OUTPUT CONTROL (CRITICAL)
