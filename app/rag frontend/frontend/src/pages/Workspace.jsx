@@ -17,19 +17,20 @@ export default function Workspace() {
   const [searchParams] = useSearchParams();
   const docsParam = searchParams.get("docs");
   const singleDocParam = searchParams.get("doc");
-  
+
   let docs = [];
   if (docsParam) {
     docs = docsParam.split(',').filter(Boolean);
   } else if (singleDocParam) {
     docs = [singleDocParam];
   }
-  
+
   const chatIdParam = searchParams.get("chat_id");
-  
+
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [jumpTarget, setJumpTarget] = useState(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const navigate = useNavigate();
   const endRef = useRef(null);
@@ -39,67 +40,67 @@ export default function Workspace() {
   }, [messages, loading]);
 
   const handleAsk = async () => {
-  if (!query.trim()) return;
+    if (!query.trim()) return;
 
-  const userMsg = { role: "user", text: query };
-  setMessages((prev) => [...prev, userMsg]);
-  setLoading(true);
-  setQuery("");
+    const userMsg = { role: "user", text: query };
+    setMessages((prev) => [...prev, userMsg]);
+    setLoading(true);
+    setQuery("");
 
-  let selectedFileNames = docs.map(d => d.split('/').pop());
+    let selectedFileNames = docs.map(d => d.split('/').pop());
 
-  const res = await fetch("/chat/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message: userMsg.text,
-      conversation_id: "default_session",
-      selected_pdf_ids: selectedFileNames,
-    }),
-  });
+    const res = await fetch("/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: userMsg.text,
+        conversation_id: "default_session",
+        selected_pdf_ids: selectedFileNames,
+      }),
+    });
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
 
-  let botMessage = "";
+    let botMessage = "";
 
-  // create empty bot message
-  setMessages(prev => [...prev, { role: "bot", text: "" }]);
+    // create empty bot message
+    setMessages(prev => [...prev, { role: "bot", text: "" }]);
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    const chunk = decoder.decode(value);
-    const lines = chunk.split("\n\n");
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("\n\n");
 
-    for (let line of lines) {
-      if (!line.startsWith("data:")) continue;
+      for (let line of lines) {
+        if (!line.startsWith("data:")) continue;
 
-      const data = JSON.parse(line.replace("data: ", ""));
+        const data = JSON.parse(line.replace("data: ", ""));
 
-      if (data.type === "token") {
-        botMessage += data.content;
+        if (data.type === "token") {
+          botMessage += data.content;
 
-        setMessages(prev => {
-          const updated = [...prev];
-          updated[updated.length - 1].text = botMessage;
-          return updated;
-        });
-      }
+          setMessages(prev => {
+            const updated = [...prev];
+            updated[updated.length - 1].text = botMessage;
+            return updated;
+          });
+        }
 
-      if (data.type === "done") {
-        setMessages(prev => {
-          const updated = [...prev];
-          updated[updated.length - 1].sources = data.sources;
-          return updated;
-        });
+        if (data.type === "done") {
+          setMessages(prev => {
+            const updated = [...prev];
+            updated[updated.length - 1].sources = data.sources;
+            return updated;
+          });
+        }
       }
     }
-  }
 
-  setLoading(false);
-};
+    setLoading(false);
+  };
 
   const onKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -112,12 +113,12 @@ export default function Workspace() {
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
 
       {/* Middle side: PDF Viewer */}
-      <div style={{ 
-        flex: isExpanded ? 1 : 1.2, 
-        borderRight: '1px solid var(--border)', 
-        display: 'flex', 
+      <div style={{
+        flex: isExpanded ? 1 : 1.2,
+        borderRight: '1px solid var(--border)',
+        display: 'flex',
         flexDirection: 'column',
-        backgroundColor: '#1f2229', 
+        backgroundColor: '#1f2229',
         transition: 'flex 0.3s ease'
       }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--background)' }}>
@@ -129,11 +130,11 @@ export default function Workspace() {
             {isExpanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
           </button>
         </div>
-        
+
         <div className="custom-scrollbar" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem' }}>
           {docs.length > 0 ? (
             docs.map((doc, idx) => (
-              <PdfViewer key={idx} docParam={doc} isExpanded={isExpanded} />
+              <PdfViewer key={idx} docParam={doc} jumpTarget={jumpTarget} isExpanded={isExpanded} />
             ))
           ) : (
             <div style={{ boxShadow: 'var(--shadow-lg)', backgroundColor: 'white', minHeight: '800px', minWidth: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#666' }}>
@@ -152,7 +153,7 @@ export default function Workspace() {
             <h2 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>AI Workspace</h2>
           </div>
         </div>
-        
+
         <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {messages.length === 0 && (
             <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--muted-foreground)' }}>
@@ -165,10 +166,10 @@ export default function Workspace() {
           )}
 
           {messages.map((m, i) => (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              key={i} 
+              key={i}
               style={{ display: 'flex', justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}
             >
               {m.role === "bot" && (
@@ -190,34 +191,86 @@ export default function Workspace() {
                 {m.role === "bot" ? (
                   <>
                     <Markdown>{m.text}</Markdown>
-                    {m.sources && m.sources.length > 0 && (
-                      <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
-                        <p style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '0.4rem', fontWeight: 600 }}>
-                          Sources
-                        </p>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                          {m.sources.map((src, si) => (
-                            <span
-                              key={si}
-                              style={{
-                                fontSize: '0.7rem',
-                                padding: '0.2rem 0.5rem',
-                                borderRadius: '999px',
-                                backgroundColor: 'rgba(59,130,246,0.12)',
-                                color: 'var(--primary)',
-                                border: '1px solid rgba(59,130,246,0.25)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.25rem',
-                              }}
-                            >
-                              <FileText size={10} />
-                              {src.file_name} · p.{src.page_number}
-                            </span>
-                          ))}
+                    {m.sources && m.sources.length > 0 && (() => {
+
+                      // ── Deduplicate by file + page keeping highest hnsw_score ──
+                      const uniqueSourcesMap = new Map();
+
+                      m.sources.forEach((src) => {
+                        const key = `${src.file_name}_${src.page_number}`;
+
+                        const existing = uniqueSourcesMap.get(key);
+
+                        const currentScore = src.hnsw_score || 0;
+                        const existingScore = existing?.hnsw_score || 0;
+
+                        if (!existing || currentScore > existingScore) {
+                          uniqueSourcesMap.set(key, src);
+                        }
+                      });
+
+                      // ── Sort by highest semantic relevance ──
+                      const uniqueSources = Array.from(uniqueSourcesMap.values())
+                        .sort((a, b) => (b.hnsw_score || 0) - (a.hnsw_score || 0))
+                        .slice(0, 5); // optional top limit
+
+                      return (
+                        <div
+                          style={{
+                            marginTop: '0.75rem',
+                            paddingTop: '0.75rem',
+                            borderTop: '1px solid var(--border)'
+                          }}
+                        >
+                          <p
+                            style={{
+                              fontSize: '0.75rem',
+                              color: 'var(--muted-foreground)',
+                              marginBottom: '0.4rem',
+                              fontWeight: 600
+                            }}
+                          >
+                            Sources
+                          </p>
+
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexWrap: 'wrap',
+                              gap: '0.4rem'
+                            }}
+                          >
+                            {uniqueSources.map((src, si) => (
+                              <button
+                                key={si}
+                                onClick={() => {
+                                  setJumpTarget({
+                                    fileName: src.file_name,
+                                    page: src.page_number,
+                                    ts: Date.now(),
+                                  });
+                                }}
+                                style={{
+                                  fontSize: '0.7rem',
+                                  padding: '0.2rem 0.5rem',
+                                  borderRadius: '999px',
+                                  backgroundColor: 'rgba(59,130,246,0.12)',
+                                  color: 'var(--primary)',
+                                  border: '1px solid rgba(59,130,246,0.25)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <FileText size={10} />
+                                {src.file_name} · p.{src.page_number}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </>
                 ) : (
                   m.text
@@ -227,32 +280,32 @@ export default function Workspace() {
           ))}
 
           {loading && (
-             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'flex', justifyContent: 'flex-start' }}>
-               <div style={{ background: 'linear-gradient(135deg, var(--primary), var(--accent))', width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginRight: '1rem' }}>
-                  <span style={{ color: 'white', fontWeight: 'bold', fontSize: '14px' }}>AI</span>
-               </div>
-               <div style={{
-                 padding: '1rem 1.25rem',
-                 borderRadius: '1rem',
-                 backgroundColor: 'var(--card)',
-                 border: '1px solid var(--border)',
-                 display: 'flex',
-                 alignItems: 'center',
-                 gap: '0.5rem'
-               }}>
-                 <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
-                 <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite 0.2s' }} />
-                 <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite 0.4s' }} />
-               </div>
-             </motion.div>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'flex', justifyContent: 'flex-start' }}>
+              <div style={{ background: 'linear-gradient(135deg, var(--primary), var(--accent))', width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginRight: '1rem' }}>
+                <span style={{ color: 'white', fontWeight: 'bold', fontSize: '14px' }}>AI</span>
+              </div>
+              <div style={{
+                padding: '1rem 1.25rem',
+                borderRadius: '1rem',
+                backgroundColor: 'var(--card)',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}>
+                <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
+                <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite 0.2s' }} />
+                <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite 0.4s' }} />
+              </div>
+            </motion.div>
           )}
           <div ref={endRef} />
         </div>
 
         <div style={{ padding: '1.5rem', borderTop: '1px solid var(--border)', backgroundColor: 'var(--card)' }}>
-          <div style={{ 
-            position: 'relative', 
-            display: 'flex', 
+          <div style={{
+            position: 'relative',
+            display: 'flex',
             alignItems: 'flex-end',
             backgroundColor: 'var(--background)',
             border: '1px solid var(--border)',
@@ -279,7 +332,7 @@ export default function Workspace() {
               }}
               className="custom-scrollbar"
             />
-            <button 
+            <button
               onClick={handleAsk}
               disabled={!query.trim() || loading}
               style={{
@@ -309,23 +362,33 @@ export default function Workspace() {
   );
 }
 
-function PdfViewer({ docParam, isExpanded }) {
+function PdfViewer({ docParam, jumpTarget, isExpanded }) {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [pageBlobs, setPageBlobs] = useState([]);
   const fileName = docParam.split('/').pop(); // only for display
+
+  useEffect(() => {
+    if (!jumpTarget) return;
+
+    // match current viewer file
+    if (jumpTarget.fileName !== fileName) return;
+
+    setPageNumber(jumpTarget.page);
+  }, [jumpTarget, fileName]);
+
   console.log("docParam:", docParam, typeof docParam);
   function onDocumentLoadSuccess({ numPages }) {
     setNumPages(numPages);
   }
 
   useEffect(() => {
-      fetch(`/pages/${encodeURIComponent(fileName)}`)
+    fetch(`/pages/${encodeURIComponent(fileName)}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data && data.pages) setPageBlobs(data.pages);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [docParam]);
 
   const handleDownloadFull = () => {
@@ -338,24 +401,24 @@ function PdfViewer({ docParam, isExpanded }) {
 
   return (
     <div style={{ marginBottom: '3rem', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <div style={{ 
-        width: '100%', 
+      <div style={{
+        width: '100%',
         maxWidth: isExpanded ? '550px' : '750px',
-        padding: '0.75rem 1rem', 
-        backgroundColor: 'var(--card)', 
+        padding: '0.75rem 1rem',
+        backgroundColor: 'var(--card)',
         border: '1px solid var(--border)',
         borderRadius: '8px 8px 0 0',
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center' 
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
       }}>
         <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '40%' }}>
           {docParam.split('/').pop()}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--muted)', padding: '0.25rem', borderRadius: 'var(--radius)' }}>
-          <button 
-            className="btn btn-ghost" 
-            style={{ padding: '0.25rem' }} 
+          <button
+            className="btn btn-ghost"
+            style={{ padding: '0.25rem' }}
             onClick={() => setPageNumber(p => Math.max(1, p - 1))}
             disabled={pageNumber <= 1}
           >
@@ -364,9 +427,9 @@ function PdfViewer({ docParam, isExpanded }) {
           <span style={{ fontSize: '0.75rem', margin: '0 0.25rem', fontFamily: 'monospace' }}>
             {pageNumber} / {numPages || '-'}
           </span>
-          <button 
-            className="btn btn-ghost" 
-            style={{ padding: '0.25rem' }} 
+          <button
+            className="btn btn-ghost"
+            style={{ padding: '0.25rem' }}
             onClick={() => setPageNumber(p => Math.min(numPages || p, p + 1))}
             disabled={pageNumber >= (numPages || Infinity)}
           >
@@ -392,10 +455,10 @@ function PdfViewer({ docParam, isExpanded }) {
           </button>
         </div>
       </div>
-      
+
       <div style={{ boxShadow: 'var(--shadow-lg)', backgroundColor: 'white', minHeight: '800px', minWidth: isExpanded ? '500px' : '700px' }}>
         <Document
-        file={`/download/${encodeURIComponent(docParam)}`}
+          file={`/download/${encodeURIComponent(docParam)}`}
           onLoadSuccess={onDocumentLoadSuccess}
           loading={<div style={{ padding: '4rem', color: 'black', display: 'flex', justifyContent: 'center' }}><Loader2 className="animate-spin" /></div>}
           error={
