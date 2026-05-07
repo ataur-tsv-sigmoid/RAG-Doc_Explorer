@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from app.services.conversation_service import ConversationService
 from pydantic import BaseModel
 from typing import Optional, List
 from pypdf import PdfReader
@@ -12,8 +13,9 @@ from app.db.init_db import run_db_init
 from app.services.llm_service import GroqLLMClient
 _llm = GroqLLMClient()
 from app.services.rag_service import rag_prepare
-from app.services.rag_service import _history
+# from app.services.rag_service import _history
 from app.services.llm_service import ChatMessage
+from app.services.rag_service import clear_history
 
 from app.db.db import Database
 from app.core.config import settings
@@ -23,7 +25,9 @@ from app.services.ingestion_azure_service import process_single_pdf
 from app.services.retrieval_service import hybrid_search
 from app.services.rag_service import rag_chat, clear_history
 from app.services.db_service import create_document, update_status, update_page_count, get_all_documents, search_documents_by_title
-
+from app.jobs.conversation_cleanup import (
+    start_cleanup_scheduler
+)
 logger = get_logger(__name__)
 
 app = FastAPI(title="NeuralRAG")
@@ -58,6 +62,7 @@ class SearchRequest(BaseModel):
 def startup():
     Database.initialize()
     run_db_init()
+    start_cleanup_scheduler()
 
 
 @app.on_event("shutdown")
@@ -77,11 +82,12 @@ import json
 async def chat_stream(request: ChatRequest):
 
     def event_generator():
+
         full_answer = ""
 
         try:
             # ─────────────────────────────
-            # 1. PREPARE RAG (NO LLM CALL)
+            # 1. PREPARE RAG
             # ─────────────────────────────
             rag_data = rag_prepare(
                 user_message=request.message,
@@ -94,42 +100,70 @@ async def chat_stream(request: ChatRequest):
             chunks = rag_data["chunks"]
 
             # ─────────────────────────────
-            # 2. STREAM TOKENS FROM LLM
+            # 2. STREAM TOKENS
             # ─────────────────────────────
-            buffer = ""   # helps avoid flickering UI
+            buffer = ""
 
             for token in _llm.generate_stream(
                 system_prompt,
                 history,
                 request.message,
             ):
+
                 full_answer += token
                 buffer += token
 
-                # flush every few chars (smooth streaming)
+                # smoother frontend streaming
                 if len(buffer) > 20:
-                    yield f"data: {json.dumps({'type': 'token', 'content': buffer})}\n\n"
+                    payload = {
+                        "type": "token",
+                        "content": buffer,
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
                     buffer = ""
 
             # flush remaining buffer
             if buffer:
-                yield f"data: {json.dumps({'type': 'token', 'content': buffer})}\n\n"
+
+                payload = {
+                    "type": "token",
+                    "content": buffer,
+                }
+
+                yield f"data: {json.dumps(payload)}\n\n"
 
             # ─────────────────────────────
-            # 3. STORE CONVERSATION MEMORY
+            # 3. SAVE CONVERSATION TO POSTGRES
             # ─────────────────────────────
-            _history.append(
+            print("\n" + "=" * 80)
+            print("💾 SAVING CONVERSATION TO POSTGRES")
+            print("=" * 80)
+
+            print(f"conversation_id = {request.conversation_id}")
+            print(f"user = {request.message[:100]}")
+            print(f"assistant = {full_answer[:100]}")
+
+            ConversationService.append(
                 request.conversation_id,
-                ChatMessage("user", request.message)
+                ChatMessage(
+                    role="user",
+                    content=request.message
+                )
             )
 
-            _history.append(
+            ConversationService.append(
                 request.conversation_id,
-                ChatMessage("assistant", full_answer)
+                ChatMessage(
+                    role="assistant",
+                    content=full_answer
+                )
             )
 
+            print("✅ Conversation saved")
+
             # ─────────────────────────────
-            # 4. FINAL EVENT (SOURCES)
+            # 4. FINAL SOURCES EVENT
+            # ─────────────────────────────
             payload = {
                 "type": "done",
                 "sources": [
@@ -144,12 +178,14 @@ async def chat_stream(request: ChatRequest):
             yield f"data: {json.dumps(payload)}\n\n"
 
         except Exception as e:
-            # ─────────────────────────────
-            # ERROR HANDLING
-            # ─────────────────────────────
+
+            import traceback
+
+            traceback.print_exc()
+
             error_payload = {
-            "type": "error",
-            "content": str(e),
+                "type": "error",
+                "content": str(e),
             }
 
             yield f"data: {json.dumps(error_payload)}\n\n"
@@ -219,10 +255,44 @@ def process_file(file, storage):
 
 @app.post("/upload-multiple")
 async def upload_multiple(files: List[UploadFile] = File(...)):
+
     storage = AzureStorageService()
 
+    prepared_files = []
+
+    # Read files BEFORE threading
+    for file in files:
+
+        content = await file.read()
+
+        prepared_files.append({
+            "filename": file.filename,
+            "content": content,
+        })
+
+    def process_prepared_file(file_data):
+
+        temp_path = f"/tmp/{file_data['filename']}"
+
+        with open(temp_path, "wb") as f:
+            f.write(file_data["content"])
+
+        class FakeUpload:
+            filename = file_data["filename"]
+
+            class Inner:
+                def read(self_inner):
+                    return file_data["content"]
+
+            file = Inner()
+
+        return process_file(FakeUpload(), storage)
+
     with ThreadPoolExecutor(max_workers=5) as executor:
-        results = list(executor.map(lambda f: process_file(f, storage), files))
+
+        results = list(
+            executor.map(process_prepared_file, prepared_files)
+        )
 
     return {"results": results}
 
@@ -553,7 +623,21 @@ async def chat_with_docs(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 @app.delete("/chat/history/{conversation_id}")
-async def reset_chat(conversation_id: str):
-    storage = AzureStorageService()
-    clear_history(conversation_id)
-    return {"message": f"History for '{conversation_id}' cleared."}
+async def delete_chat_history(conversation_id: str):
+
+    try:
+
+        clear_history(conversation_id)
+
+        return {
+            "success": True,
+            "conversation_id": conversation_id,
+            "message": "Chat history cleared",
+        }
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )

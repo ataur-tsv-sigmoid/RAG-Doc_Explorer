@@ -181,7 +181,14 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
             page, page_num = page_tuple
             logger.info(f"OCR on page {page_num}")
 
-            pdf_path = f"/tmp/page_{page_num}.pdf"
+            safe_doc_name = (
+            os.path.basename(document_id)
+            .replace(" ", "_")
+            .replace("/", "_")
+            .replace("\\", "_")
+        )
+
+            pdf_path = f"/tmp/{safe_doc_name}_page_{page_num}.pdf"
 
             writer = PdfWriter()
             writer.add_page(page)

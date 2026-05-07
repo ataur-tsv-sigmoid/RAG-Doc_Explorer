@@ -2,10 +2,11 @@ import { useState, useRef, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { Document, Page, pdfjs } from "react-pdf";
 import Markdown from "react-markdown";
-import { Send, Maximize2, Minimize2, ChevronLeft, ChevronRight, Loader2, Search, FileText, Plus, History, PanelLeftClose, PanelLeftOpen, Download } from "lucide-react";
+import { Send, Maximize2, Minimize2, ChevronLeft, ChevronRight, Loader2, Search, FileText, Plus, Trash2, History, PanelLeftClose, PanelLeftOpen, Download } from "lucide-react";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import { motion, AnimatePresence } from "framer-motion";
+
 
 // Configure PDF worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -14,9 +15,32 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 export default function Workspace() {
+  const generateChatId = () => {
+    return `chat_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+  };
   const [searchParams] = useSearchParams();
   const docsParam = searchParams.get("docs");
   const singleDocParam = searchParams.get("doc");
+
+  const handleClearHistory = async () => {
+
+    try {
+
+      await fetch(
+        `/chat/history/${conversationId}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      setMessages([]);
+
+    } catch (err) {
+
+      console.error("Failed to clear history", err);
+
+    }
+  };
 
   let docs = [];
   if (docsParam) {
@@ -28,13 +52,27 @@ export default function Workspace() {
   const chatIdParam = searchParams.get("chat_id");
 
   const [query, setQuery] = useState("");
+  const [conversationId, setConversationId] = useState(() => {
+    return chatIdParam || generateChatId();
+  });
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [jumpTarget, setJumpTarget] = useState(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const navigate = useNavigate();
   const endRef = useRef(null);
+  useEffect(() => {
 
+    const params = new URLSearchParams(searchParams);
+
+    params.set("chat_id", conversationId);
+
+    navigate(
+      `/workspace?${params.toString()}`,
+      { replace: true }
+    );
+
+  }, [conversationId]);
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
@@ -54,7 +92,7 @@ export default function Workspace() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: userMsg.text,
-        conversation_id: "default_session",
+        conversation_id: conversationId,
         selected_pdf_ids: selectedFileNames,
       }),
     });
@@ -149,8 +187,79 @@ export default function Workspace() {
       {/* Right side: Chat */}
       <div style={{ flex: isExpanded ? 3 : 2.5, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--background)', transition: 'flex 0.3s ease' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h2 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>AI Workspace</h2>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: "1rem",
+              position: "relative",
+              zIndex: 10,
+              pointerEvents: "auto",
+            }}
+          >
+            <h2
+              style={{
+                fontSize: "1.25rem",
+                marginBottom: "0.25rem",
+              }}
+            >
+              AI Workspace
+            </h2>
+
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                pointerEvents: "auto",
+              }}
+            >
+              {/* NEW CHAT */}
+              <button
+                type="button"
+                onClick={() => {
+                  const newChatId = generateChatId();
+
+                  setConversationId(newChatId);
+
+                  setMessages([]);
+
+                  const params = new URLSearchParams(searchParams);
+
+                  params.set("chat_id", newChatId);
+
+                  navigate(`/workspace?${params.toString()}`);
+                }}
+                style={{
+                  cursor: "pointer",
+                  padding: "0.45rem 0.8rem",
+                  borderRadius: "8px",
+                  border: "1px solid #ccc",
+                  background: "#fff",
+                }}
+              >
+                New Chat
+              </button>
+
+              {/* CLEAR HISTORY */}
+              <button
+                type="button"
+                onClick={handleClearHistory}
+                style={{
+                  cursor: "pointer",
+                  padding: "0.45rem 0.8rem",
+                  borderRadius: "8px",
+                  border: "1px solid #ffb3b3",
+                  background: "#ffe5e5",
+                  color: "#c62828",
+                  position: "relative",
+                  zIndex: 20,
+                  pointerEvents: "auto",
+                }}
+              >
+                Clear History
+              </button>
+            </div>
           </div>
         </div>
 

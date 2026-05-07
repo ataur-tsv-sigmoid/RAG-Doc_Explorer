@@ -3,6 +3,7 @@ Retrieval Service — Hybrid BM25 (sparse) + HNSW (dense) search
 """
 
 import logging, re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +15,7 @@ from app.services.re_ranker_service import rerank
 logger = logging.getLogger(__name__)
 
 # ── Tuning knobs ──────────────────────────────────────────────────────────────
-DEFAULT_TOP_K: int = 5
+DEFAULT_TOP_K: int = 20
 DEFAULT_BM25_WEIGHT: float = 0.2
 DEFAULT_HNSW_WEIGHT: float = 0.8
 RRF_K: int = 60
@@ -87,9 +88,10 @@ def _bm25_search(
             bm25_score=row[6],   # ✅ ADD THIS
         )
     )
-    logger.info("------ BM25 RESULTS ------")
-    for i, r in enumerate(results):
-        logger.info(f"[BM25 {i}] score={r.bm25_score} -> {r.content}")
+    # logger.info("------ BM25 RESULTS ------")
+    # for i, r in enumerate(results):
+    #     logger.info(f"[BM25 {i}] score={r.bm25_score} -> {r.content}")
+    debug_file_distribution("BM25", results)
     return results
 
 
@@ -97,7 +99,7 @@ def _bm25_search(
 
 def _hnsw_search(
     query: str,
-    top_k: int = DEFAULT_TOP_K * 2,
+    top_k: int = DEFAULT_TOP_K * 3,
 ) -> list[RetrievedChunk]:
     if not query or not query.strip():
         return []
@@ -144,8 +146,10 @@ def _hnsw_search(
             hnsw_score=row[6], 
         )
 )
-    for i, r in enumerate(results):
-        logger.info(f"[HNSW {i}] score={r.hnsw_score} -> {r.content}")
+    # for i, r in enumerate(results):
+    #     logger.info(f"[HNSW {i}] score={r.hnsw_score} -> {r.content}")
+    
+    debug_file_distribution("HNSW", results)
     return results
 
 # ── Reciprocal Rank Fusion ────────────────────────────────────────────────────
@@ -192,18 +196,55 @@ def _reciprocal_rank_fusion(
 
         # ✅ preserve hnsw score
         merged_chunk.hnsw_score = chunk.hnsw_score
-    logger.info("------ RRF FUSED RESULTS ------")
-    for i, r in enumerate(sorted(merged.values(), key=lambda c: c.rrf_score, reverse=True)):
-        logger.info(
-            f"[RRF {i}] score={r.rrf_score:.4f} | "
-            f"bm25_rank={r.bm25_rank} hnsw_rank={r.hnsw_rank} | "
-            f"text={r.content}"
-        )
+    # logger.info("------ RRF FUSED RESULTS ------")
+    # for i, r in enumerate(sorted(merged.values(), key=lambda c: c.rrf_score, reverse=True)):
+    #     logger.info(
+    #         f"[RRF {i}] score={r.rrf_score:.4f} | "
+    #         f"bm25_rank={r.bm25_rank} hnsw_rank={r.hnsw_rank} | "
+    #         f"text={r.content}"
+    #     )
+    
     return sorted(merged.values(), key=lambda c: c.rrf_score, reverse=True)
 
 def normalize_query(q: str):
     q = q.lower()
     return re.sub(r'[^a-z0-9\s\.\,\%\!\?\$\:\(\)]', ' ', q)
+
+def debug_file_distribution(stage: str, chunks: list[RetrievedChunk]):
+
+    print("\n" + "=" * 80)
+    print(f"📂 FILE DISTRIBUTION — {stage}")
+    print("=" * 80)
+
+    if not chunks:
+        print("❌ No chunks")
+        return
+
+    counter = Counter()
+
+    for c in chunks:
+        counter[c.file_name] += 1
+
+    print(f"Total chunks: {len(chunks)}")
+    print()
+
+    for file_name, count in counter.most_common():
+        print(f"{count:3d} chunks -> {file_name}")
+
+    print("\nTOP CHUNKS:\n")
+
+    for i, c in enumerate(chunks[:30]):
+
+        print(
+            f"[{i:02d}] "
+            f"file={c.file_name} | "
+            f"page={c.page_number} | "
+            f"chunk={c.chunk_id} | "
+            f"rrf={c.rrf_score:.4f} | "
+            f"rerank={c.rerank_score:.4f}"
+        )
+
+    print("=" * 80 + "\n")
 
 def _get_adjacent_chunks(chunk):
     conn = Database.get_connection()
@@ -229,7 +270,7 @@ def _get_adjacent_chunks(chunk):
 
 def hybrid_search(
     query: str,
-    top_k: int = DEFAULT_TOP_K,
+    top_k: int = DEFAULT_TOP_K*2,
     bm25_weight: float = DEFAULT_BM25_WEIGHT,
     hnsw_weight: float = DEFAULT_HNSW_WEIGHT,
 ) -> list[RetrievedChunk]:
@@ -246,12 +287,15 @@ def hybrid_search(
         hnsw_results = hnsw_f.result()
 
     fused = _reciprocal_rank_fusion(bm25_results, hnsw_results, bm25_weight, hnsw_weight)
+    debug_file_distribution("RRF FUSED", fused)
+
     reranked = rerank(query, fused[:top_k * 3])
-    logger.info("------ RERANKED RESULTS ------")
-    for i, r in enumerate(reranked):
-        logger.info(f"[RERANK {i}] score={r.rerank_score} -> {r.content[:150]}")
+    debug_file_distribution("RERANKED", reranked)
+    # logger.info("------ RERANKED RESULTS ------")
+    # for i, r in enumerate(reranked):
+    #     logger.info(f"[RERANK {i}] score={r.rerank_score} -> {r.content[:150]}")
     final_expanded = []
-    top_chunks = reranked[:top_k]
+    top_chunks = reranked[:top_k*2]
     def get_support_chunks_for_chunk(chunk, candidates, max_support=2):
         # sort by similarity to current chunk (use rerank_score or embedding similarity)
         related = sorted(
@@ -278,6 +322,10 @@ def hybrid_search(
         if support_text.strip(): sections.append(f"Supporting context:\n{support_text}")
 
         chunk.llm_content = "\n\n".join(sections)
-        final_expanded.append(chunk)
 
+        final_expanded.append(chunk)
+    debug_file_distribution(
+    "FINAL EXPANDED",
+    final_expanded
+    )
     return final_expanded
