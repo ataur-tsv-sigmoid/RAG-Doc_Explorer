@@ -10,6 +10,7 @@ import numpy as np
 from app.services.retrieval_service import hybrid_search, RetrievedChunk
 from app.services.llm_service import GroqLLMClient, ChatMessage, ANSWER_GENERATION_PROMPT
 from app.services.embedding_service import generate_embedding
+from app.services.conversation_service import ConversationService
 
 
 # ── CONFIG ─────────────────────────────────────────────────
@@ -42,84 +43,84 @@ class ChatResponse:
 
 # ── MEMORY (FIXED) ─────────────────────────────────────────
 
-class ConversationHistory:
+# class ConversationHistory:
 
-    def __init__(self):
-        self.store: dict[str, list[ChatMessage]] = {}
-        self.embeddings: dict[str, list] = {}
+#     def __init__(self):
+#         self.store: dict[str, list[ChatMessage]] = {}
+#         self.embeddings: dict[str, list] = {}
 
-    def append(self, cid: str, msg: ChatMessage):
-        if cid not in self.store:
-            self.store[cid] = []
-            self.embeddings[cid] = []
+#     def append(self, cid: str, msg: ChatMessage):
+#         if cid not in self.store:
+#             self.store[cid] = []
+#             self.embeddings[cid] = []
 
-        self.store[cid].append(msg)
+#         self.store[cid].append(msg)
 
-        # ✅ FIX 1: Use correct embedding type
-        if msg.role == "user":
-            emb = generate_embedding(msg.content, is_query=True)
-        else:
-            emb = generate_embedding(msg.content, is_query=False)
+#         # ✅ FIX 1: Use correct embedding type
+#         if msg.role == "user":
+#             emb = generate_embedding(msg.content, is_query=True)
+#         else:
+#             emb = generate_embedding(msg.content, is_query=False)
 
-        self.embeddings[cid].append(emb)
+#         self.embeddings[cid].append(emb)
 
-        # cap history
-        max_msgs = MAX_HISTORY_TURNS * 2
-        if len(self.store[cid]) > max_msgs:
-            self.store[cid] = self.store[cid][-max_msgs:]
-            self.embeddings[cid] = self.embeddings[cid][-max_msgs:]
+#         # cap history
+#         max_msgs = MAX_HISTORY_TURNS * 2
+#         if len(self.store[cid]) > max_msgs:
+#             self.store[cid] = self.store[cid][-max_msgs:]
+#             self.embeddings[cid] = self.embeddings[cid][-max_msgs:]
 
-    def get_recent(self, cid: str, n: int = MAX_HISTORY_TURNS) -> List[ChatMessage]:
-        msgs = self.store.get(cid, [])
-        return msgs[-(n * 2):]
+#     def get_recent(self, cid: str, n: int = MAX_HISTORY_TURNS) -> List[ChatMessage]:
+#         msgs = self.store.get(cid, [])
+#         return msgs[-(n * 2):]
 
-    def semantic_search(self, cid: str, query: str, top_k: int = SEMANTIC_TOP_K) -> List[ChatMessage]:
-        if cid not in self.store or not self.store[cid]:
-            return []
+#     def semantic_search(self, cid: str, query: str, top_k: int = SEMANTIC_TOP_K) -> List[ChatMessage]:
+#         if cid not in self.store or not self.store[cid]:
+#             return []
 
-        query_emb = generate_embedding(query, is_query=True)
-        if query_emb is None:
-            return self.get_recent(cid)
+#         query_emb = generate_embedding(query, is_query=True)
+#         if query_emb is None:
+#             return self.get_recent(cid)
 
-        query_vec = np.array(query_emb)
-        scores = []
+#         query_vec = np.array(query_emb)
+#         scores = []
 
-        for i, emb in enumerate(self.embeddings[cid]):
-            if emb is None:
-                continue
+#         for i, emb in enumerate(self.embeddings[cid]):
+#             if emb is None:
+#                 continue
 
-            emb_vec = np.array(emb)
+#             emb_vec = np.array(emb)
 
-            # ✅ FIX 2: embeddings already normalized → dot product only
-            sim = np.dot(query_vec, emb_vec)
+#             # ✅ FIX 2: embeddings already normalized → dot product only
+#             sim = np.dot(query_vec, emb_vec)
 
-            scores.append((sim, i))
+#             scores.append((sim, i))
 
-        scores.sort(reverse=True, key=lambda x: x[0])
+#         scores.sort(reverse=True, key=lambda x: x[0])
 
-        selected: List[ChatMessage] = []
-        used: set[int] = set()
+#         selected: List[ChatMessage] = []
+#         used: set[int] = set()
 
-        for _, idx in scores[:top_k]:
-            if idx in used:
-                continue
+#         for _, idx in scores[:top_k]:
+#             if idx in used:
+#                 continue
 
-            selected.append(self.store[cid][idx])
-            used.add(idx)
+#             selected.append(self.store[cid][idx])
+#             used.add(idx)
 
-            # keep conversational continuity
-            if idx + 1 < len(self.store[cid]) and (idx + 1) not in used:
-                selected.append(self.store[cid][idx + 1])
-                used.add(idx + 1)
+#             # keep conversational continuity
+#             if idx + 1 < len(self.store[cid]) and (idx + 1) not in used:
+#                 selected.append(self.store[cid][idx + 1])
+#                 used.add(idx + 1)
 
-        return selected
+#         return selected
 
-    def clear(self, cid: str):
-        self.store.pop(cid, None)
-        self.embeddings.pop(cid, None)
+#     def clear(self, cid: str):
+#         self.store.pop(cid, None)
+#         self.embeddings.pop(cid, None)
 
 
-_history = ConversationHistory()
+# _history = ConversationHistory()
 
 
 # ── CONTEXT BUILDER ────────────────────────────────────────
@@ -191,7 +192,9 @@ def rag_chat(
 ) -> ChatResponse:
 
     # ── 1. Get recent history ─────────
-    recent_history = _history.get_recent(conversation_id)
+    recent_history = ConversationService.get_recent(
+    conversation_id
+    )
 
     # ── 2. Query rewriting ────────────
     if recent_history:
@@ -254,11 +257,11 @@ def rag_chat(
     context = ContextBuilder.build(chunks)
 
     # ── 6. Semantic history ───────────
-    semantic_history = _history.semantic_search(
-        conversation_id,
-        standalone_query,
-        top_k=SEMANTIC_TOP_K,
-    )
+    semantic_history = ConversationService.semantic_search(
+    conversation_id,
+    standalone_query,
+    top_k=SEMANTIC_TOP_K,
+)
 
     history_text = _format_history(semantic_history)
 
@@ -291,8 +294,15 @@ def rag_chat(
     answer = _clean_answer(raw_answer)
 
     # ── 9. Store history ──────────────
-    _history.append(conversation_id, ChatMessage("user", user_message))
-    _history.append(conversation_id, ChatMessage("assistant", answer))
+    ConversationService.append(
+    conversation_id,
+    ChatMessage("user", user_message)
+    )
+
+    ConversationService.append(
+    conversation_id,
+    ChatMessage("assistant", answer)
+    )
 
     # ── 10. Metadata ───────────────────
     source_files = list({_basename(c.file_name) for c in chunks})
@@ -333,7 +343,9 @@ def rag_prepare(
     conversation_id: str,
     selected_pdf_ids: List[str],
 ):
-    recent_history = _history.get_recent(conversation_id)
+    recent_history = ConversationService.get_recent(
+    conversation_id
+)
 
     # ── 2. Query rewriting ────────────
     if recent_history:
@@ -396,10 +408,10 @@ def rag_prepare(
     context = ContextBuilder.build(chunks)
 
     # ── 6. Semantic history ───────────
-    semantic_history = _history.semantic_search(
-        conversation_id,
-        standalone_query,
-        top_k=SEMANTIC_TOP_K,
+    semantic_history = ConversationService.semantic_search(
+    conversation_id,
+    standalone_query,
+    top_k=SEMANTIC_TOP_K,
     )
 
     history_text = _format_history(semantic_history)
@@ -438,4 +450,4 @@ def rag_prepare(
 
 
 def clear_history(conversation_id: str):
-    _history.clear(conversation_id)
+    ConversationService.clear(conversation_id)

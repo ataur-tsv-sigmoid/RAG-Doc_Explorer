@@ -171,3 +171,48 @@ WITH (
 -- ANALYZE (IMPORTANT)
 -- ========================
 ANALYZE;
+
+-- ========================
+-- CONVERSATIONS TABLE
+-- ========================
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id BIGSERIAL PRIMARY KEY,
+
+    conversation_id TEXT NOT NULL,
+    turn_index INT NOT NULL,
+
+    role TEXT NOT NULL CHECK (
+        role IN ('user', 'assistant', 'system')
+    ),
+
+    content TEXT NOT NULL,
+
+    embedding VECTOR(1024),
+
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ========================
+-- INDEXES
+-- ========================
+
+CREATE INDEX IF NOT EXISTS idx_conversations_conversation_id
+ON conversations(conversation_id);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_created_at
+ON conversations(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_turn
+ON conversations(conversation_id, turn_index);
+
+-- Vector search index
+CREATE INDEX IF NOT EXISTS idx_conversations_embedding_hnsw
+ON conversations
+USING hnsw (embedding vector_cosine_ops)
+WITH (
+    m = 16,
+    ef_construction = 64
+);
+
+ANALYZE conversations;
